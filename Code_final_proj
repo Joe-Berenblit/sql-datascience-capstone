@@ -1,0 +1,181 @@
+%python
+import pandas as pd
+import numpy as np
+import sqlite3 as sq
+
+pd.set_option('display.float_format',lambda x: '%.2f' % x)
+
+spark.conf.set("spark.sql.execution.arrow.enabled", "true")
+
+pdDF = sql("""SELECT *
+              FROM `athlete_events_csv`""").toPandas()
+
+
+#This code establishes the different quartiles of height,weight,age for Olympic Athletes in the 1990s 
+pdDF['Age'] = pd.to_numeric(pdDF['Age'],errors='coerce')
+pdDF['Height'] = pd.to_numeric(pdDF['Height'],errors='coerce')
+pdDF['Weight'] = pd.to_numeric(pdDF['Weight'],errors='coerce')
+pdDF['Year'] = pd.to_datetime(pdDF['Year'],errors='coerce')
+pdDF = pdDF[(pdDF['Year'] >= '1990') & (pdDF['Year'] < '2000')]
+ 
+norm_mean = pdDF.groupby(['Event']).mean()
+norm_mean = norm_mean[['Age','Height','Weight']]
+n19 = norm_mean.rename(columns={'Age': 'Age19','Height': 'Height19','Weight': 'Weight19'})
+
+quart = pdDF.groupby(['Event']).quantile(.25)
+quart = quart[['Age','Height','Weight']]
+
+tert = pdDF.groupby(['Event']).quantile(.75)
+tert = tert[['Age','Height','Weight']]
+
+#This code creates the mean values for height,weight,age for medal winners
+pdDFM = pdDF.loc[(pdDF['Medal'] == 'Gold') | (pdDF['Medal'] == 'Silver') | (pdDF['Medal'] == 'Bronze')]
+medal_mean = pdDFM.groupby(['Event']).mean()
+medal_mean = medal_mean[['Age','Height','Weight']]
+Med19 = medal_mean.rename(columns={'Age': 'Age19M','Height': 'Height19M','Weight': 'Weight19M'})
+
+#This section allows me to compare the stats of the medal winners in the 1990s to all the competitors
+merged = pd.merge(norm_mean, medal_mean, right_index=True, left_index=True)
+merged['Age_diff_mean']=((merged['Age_y']-merged['Age_x'])/merged['Age_x'])*100
+merged['Height_diff_mean']=((merged['Height_y']-merged['Height_x'])/merged['Height_x'])*100
+merged['Weight_diff_mean']=((merged['Weight_y']-merged['Weight_x'])/merged['Weight_x'])*100
+merged = merged[['Age_diff_mean','Height_diff_mean','Weight_diff_mean']]
+
+qmerged = pd.merge(quart, medal_mean, right_index=True, left_index=True)
+qmerged['Age_diff_quart']=((qmerged['Age_y']-qmerged['Age_x'])/qmerged['Age_x'])*100
+qmerged['Height_diff_quart']=((qmerged['Height_y']-qmerged['Height_x'])/qmerged['Height_x'])*100
+qmerged['Weight_diff_quart']=((qmerged['Weight_y']-qmerged['Weight_x'])/qmerged['Weight_x'])*100
+qmerged = qmerged[['Age_diff_quart','Height_diff_quart','Weight_diff_quart']]
+
+tmerged = pd.merge(tert, medal_mean, right_index=True, left_index=True)
+tmerged['Age_diff_tert']=((tmerged['Age_y']-tmerged['Age_x'])/tmerged['Age_x'])*100
+tmerged['Height_diff_tert']=((tmerged['Height_y']-tmerged['Height_x'])/tmerged['Height_x'])*100
+tmerged['Weight_diff_tert']=((tmerged['Weight_y']-tmerged['Weight_x'])/tmerged['Weight_x'])*100
+tmerged = tmerged[['Age_diff_tert','Height_diff_tert','Weight_diff_tert']]
+
+
+#This section summarizes the difference across all events
+diffmerge1 = pd.merge(merged, qmerged, right_index=True, left_index=True)
+diffmerge = pd.merge(diffmerge1, tmerged, right_index=True, left_index=True).dropna()
+diffmerge = diffmerge[['Age_diff_mean','Age_diff_quart','Age_diff_tert','Height_diff_mean','Height_diff_quart','Height_diff_tert','Weight_diff_mean','Weight_diff_quart','Weight_diff_tert']]
+
+#This section allows me to determine which events had medalists who were outliers relative to overall competition
+ws = diffmerge.loc[(abs(diffmerge['Weight_diff_mean']) > abs(diffmerge['Weight_diff_quart'])) | (abs(diffmerge['Weight_diff_mean']) > abs(diffmerge['Weight_diff_tert']))]
+hs = diffmerge.loc[(abs(diffmerge['Height_diff_mean']) > abs(diffmerge['Height_diff_quart'])) | (abs(diffmerge['Height_diff_mean']) > abs(diffmerge['Height_diff_tert']))]
+ags = diffmerge.loc[(abs(diffmerge['Age_diff_mean']) > abs(diffmerge['Age_diff_quart'])) | (abs(diffmerge['Age_diff_mean']) > abs(diffmerge['Age_diff_tert']))]
+
+#This code allows me to create a dataframe to look at medalists and athletes in the 2000s to begin comparing athletes in the 1990s and 2000s
+filtab = sql("""SELECT *
+              FROM `athlete_events_csv`""").toPandas()
+
+filtab['Age'] = pd.to_numeric(filtab['Age'],errors='coerce')
+filtab['Height'] = pd.to_numeric(filtab['Height'],errors='coerce')
+filtab['Weight'] = pd.to_numeric(filtab['Weight'],errors='coerce')
+filtab['Year'] = pd.to_datetime(filtab['Year'],errors='coerce')
+filtab = filtab[(filtab['Year'] >= '2000') & (filtab['Year'] < '2010')]
+
+Med20 = filtab.loc[(filtab['Medal'] == 'Gold') | (filtab['Medal'] == 'Silver') | (filtab['Medal'] == 'Bronze')]
+Med20  = Med20.groupby(['Event']).mean()
+Med20  = Med20[['Age','Height','Weight']]
+Med20 = Med20.rename(columns={'Age': 'Age20M','Height': 'Height20M','Weight': 'Weight20M'})
+
+filtab_mean = filtab.groupby(['Event']).mean()
+filtab_mean = filtab_mean[['Age','Height','Weight']]
+
+
+w20  = pd.merge(filtab_mean, ws, right_index=True, left_index=True, how='inner')
+w20 = w20[['Weight']]
+w20 = w20.rename(columns={'Weight': 'Weight20'})
+
+
+h20  = pd.merge(filtab_mean, hs, right_index=True, left_index=True, how='inner')
+h20 = h20[['Height']]
+h20 = h20.rename(columns={'Height': 'Height20'})
+
+
+a20  = pd.merge(filtab_mean, ags, right_index=True, left_index=True, how='inner')
+a20 = a20[['Age']]
+a20 = a20.rename(columns={'Age': 'Age20'})
+
+#Here I am combining the average weight,height, and age for all competitors and medalists in each event for the 1990s and 2000s filtered by events where outliers one in the 1990s
+FW  = pd.merge(Med20, Med19, right_index=True, left_index=True, how='inner')
+FW = pd.merge(FW, w20, right_index=True, left_index=True, how='inner')
+FW = pd.merge(FW, n19, right_index=True, left_index=True, how='inner')
+FW = FW[['Weight20M','Weight20','Weight19M','Weight19']]
+
+FH  = pd.merge(Med20, Med19, right_index=True, left_index=True, how='inner')
+FH = pd.merge(FH, h20, right_index=True, left_index=True, how='inner')
+FH = pd.merge(FH, n19, right_index=True, left_index=True, how='inner')
+FH = FH[['Height20M','Height20','Height19M','Height19']]
+
+FA  = pd.merge(Med20, Med19, right_index=True, left_index=True, how='inner')
+FA = pd.merge(FA, a20, right_index=True, left_index=True, how='inner')
+FA = pd.merge(FA, n19, right_index=True, left_index=True, how='inner')
+FA = FA[['Age20M','Age20','Age19M','Age19']]
+
+
+#Using mean squared error analysis I deteremined correlations
+from sklearn.metrics import mean_squared_error
+
+print("Weight RMSE 19M to 20 is {0}".format(np.sqrt(mean_squared_error(FW['Weight19M'], FW['Weight20']))))
+print("Weight RMSE 19 to 20 is {0}".format(np.sqrt(mean_squared_error(FW['Weight19'], FW['Weight20']))))
+print("Weight RMSE 19M to 20M is {0}".format(np.sqrt(mean_squared_error(FW['Weight19M'], FW['Weight20M']))))
+print("Weight RMSE 19 to 20M is {0}".format(np.sqrt(mean_squared_error(FW['Weight19'], FW['Weight20M']))))
+print("Weight RMSE 19 to 19M is {0}".format(np.sqrt(mean_squared_error(FW['Weight19'], FW['Weight19M']))))
+print("Weight RMSE 20 to 20M is {0}".format(np.sqrt(mean_squared_error(FW['Weight20'], FW['Weight20M']))))
+print("        ")
+print("Height RMSE 19M to 20 is {0}".format(np.sqrt(mean_squared_error(FH['Height19M'], FH['Height20']))))
+print("Height RMSE 19 to 20 is {0}".format(np.sqrt(mean_squared_error(FH['Height19'], FH['Height20']))))
+print("Height RMSE 19M to 20M is {0}".format(np.sqrt(mean_squared_error(FH['Height19M'], FH['Height20M']))))
+print("Height RMSE 19 to 20M is {0}".format(np.sqrt(mean_squared_error(FH['Height19'], FH['Height20M']))))
+print("Height RMSE 19 to 19M is {0}".format(np.sqrt(mean_squared_error(FH['Height19'], FH['Height19M']))))
+print("Height RMSE 20 to 20M is {0}".format(np.sqrt(mean_squared_error(FH['Height20'], FH['Height20M']))))
+print("        ")
+print("Age RMSE 19M to 20 is {0}".format(np.sqrt(mean_squared_error(FA['Age19M'], FA['Age20']))))
+print("Age RMSE 19 to 20 is {0}".format(np.sqrt(mean_squared_error(FA['Age19'], FA['Age20']))))
+print("Age RMSE 19M to 20M is {0}".format(np.sqrt(mean_squared_error(FA['Age19M'], FA['Age20M']))))
+print("Age RMSE 19 to 20M is {0}".format(np.sqrt(mean_squared_error(FA['Age19'], FA['Age20M']))))
+print("Age RMSE 20 to 20M is {0}".format(np.sqrt(mean_squared_error(FA['Age20'], FA['Age20M']))))
+print("Age RMSE 19 to 19M is {0}".format(np.sqrt(mean_squared_error(FA['Age19'], FA['Age19M']))))
+print("Age RMSE 20 to 20M is {0}".format(np.sqrt(mean_squared_error(FA['Age20'], FA['Age20M']))))
+
+#Charts to help illustrate my conclusions which can be found in PDF
+SELECT 
+TP.Year, 
+MP.Mean_Weight AS `Mean_Medal_Weight`,
+TP.Mean_Weight AS `Mean_Total_Weight`
+FROM 
+   (SELECT Year, avg(CAST(default.athlete_events_csv.`Weight` AS DOUBLE)) AS `Mean_Weight` 
+    FROM `athlete_events_csv` 
+    Where (Event IN ("Swimming Men's 100 metres Freestyle") AND Medal IN ("Gold", "Silver", 'Bronze'))
+    GROUP BY Year 
+    Order By Year) AS MP
+INNER JOIN 
+   (SELECT Year, avg(CAST(default.athlete_events_csv.`Weight` AS DOUBLE)) AS `Mean_Weight` 
+    FROM `athlete_events_csv` 
+    Where (Event IN ("Swimming Men's 100 metres Freestyle"))
+    GROUP BY Year 
+    Order By Year) AS TP
+ON MP.Year = TP.Year
+Where (TP.Year >= "1990" AND TP.Year < "2010")
+
+
+SELECT 
+TP.Year, 
+MP.Mean_Height AS `Mean_Medal_Height`,
+TP.Mean_Height AS `Mean_Total_Height`
+FROM 
+   (SELECT Year, avg(CAST(default.athlete_events_csv.`Height` AS DOUBLE)) AS `Mean_Height` 
+    FROM `athlete_events_csv` 
+    Where (Event IN ("Swimming Men's 100 metres Freestyle") AND Medal IN ("Gold", "Silver", 'Bronze'))
+    GROUP BY Year 
+    Order By Year) AS MP
+INNER JOIN 
+   (SELECT Year, avg(CAST(default.athlete_events_csv.`Height` AS DOUBLE)) AS `Mean_Height` 
+    FROM `athlete_events_csv` 
+    Where (Event IN ("Swimming Men's 100 metres Freestyle"))
+    GROUP BY Year 
+    Order By Year) AS TP
+ON MP.Year = TP.Year
+Where (TP.Year >= "1990" AND TP.Year < "2010")
+
